@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: agent_builder_postgres
+    environment:
+      POSTGRES_USER: agent_builder
+      POSTGRES_PASSWORD: agent_builder
+      POSTGRES_DB: agent_builder
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
