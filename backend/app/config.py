@@ -5,5 +5,8 @@ class Settings(BaseSettings):
     llm_provider: str = "ollama"
     environment: str = "development"
     database_url: str
+    secret_key: str
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
 
 settings = Settings()
