@@ -13,4 +13,9 @@ class UserRead(BaseModel):
 
     id: int
     email: EmailStr
+    role: str
     created_at: datetime
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
