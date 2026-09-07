@@ -3,10 +3,11 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from app.models import Agent,User
 
 from app.config import settings
 from app.database import get_db
-from app.models import User
+
 
 oauth2_scheme=OAuth2PasswordBearer(tokenUrl="auth/login")
 
@@ -45,3 +46,16 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
             detail="Admin access required",
         )    
     return current_user    
+
+def get_owned_agent(
+    agent_id:int,
+    current_user: User= Depends(get_current_user),
+    db: Session = Depends(get_db),
+)-> Agent:
+    agent = db.scalar(select(Agent).where(Agent.id == agent_id))
+    if agent is None or agent.owner_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Agent not found",
+        )
+    return agent    
