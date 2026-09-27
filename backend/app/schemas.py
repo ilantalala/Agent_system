@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from typing import Literal
 
 
 class UserCreate(BaseModel):
@@ -10,7 +11,6 @@ class UserCreate(BaseModel):
 
 class UserRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-
     id: int
     email: EmailStr
     role: str
@@ -26,8 +26,20 @@ class AgentCreate(BaseModel):
 
 class AgentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-
     id: int
     name: str
     owner_id: int
     created_at: datetime
+    draft_system_prompt: str | None = None
+
+
+class ChatMessage(BaseModel):
+    role: Literal["user","assistant"]
+    content: str
+
+class ArchitectChatRequest(BaseModel):
+    content: str
+
+class ArchitectChatResponse(BaseModel):
+    message: ChatMessage
+    draft_system_prompt: str | None = None
