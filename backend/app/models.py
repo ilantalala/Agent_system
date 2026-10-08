@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime,ForeignKey, String, func, Text
+from sqlalchemy import DateTime,ForeignKey, String, func, Text,JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -40,6 +40,7 @@ class Agent(Base):
     conversations: Mapped[list["Conversation"]] = relationship(
         back_populates="agent", cascade="all, delete-orphan"
     )
+    draft_review: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class Conversation(Base):

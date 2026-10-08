@@ -1,12 +1,15 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-
+from app.reviewer import review_draft
 from app.database import get_db
 from app.dependencies import get_owned_agent
 from app.llm import LLMMessage, ToolSchema, call_llm
 from app.models import Agent, Conversation, Message
 from app.schemas import ArchitectChatRequest, ArchitectChatResponse, ChatMessage
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agents/{agent_id}/architect", tags=["architect"])
 
@@ -57,6 +60,29 @@ ARCHITECT_SYSTEM_PROMPT = (
     "another question."
 )
 
+FEEDBACK_SYSTEM_PROMPT_TEMPLATE = (
+    "{base}\n\n"
+    "You just proposed a draft system prompt, but a review found it still "
+    "needs work on:\n{gaps}\n\n"
+    "Ask ONE natural follow-up question that addresses the first item above. "
+    "Continue the interview as if it's simply the next question — do not "
+    "mention 'review', 'rubric', or that an evaluation happened."
+)
+
+DRAFT_READY_MESSAGE = (
+    "Your draft passed review on all five fronts — role, tasks, tone, edge "
+    "cases, and examples are all covered. It's ready to move to testing."
+)
+
+def _next_question_from_review(
+    llm_messages: list[LLMMessage], failed: list[tuple[str, str]]
+) -> str:
+    gaps = "\n".join(f"- {dimension}: {note}" for dimension, note in failed)
+    system_prompt = FEEDBACK_SYSTEM_PROMPT_TEMPLATE.format(
+        base=ARCHITECT_SYSTEM_PROMPT, gaps=gaps
+    )
+    response = call_llm(system_prompt, llm_messages)
+    return response.text
 
 @router.post("/chat", response_model=ArchitectChatResponse)
 def architect_chat(
@@ -86,7 +112,25 @@ def architect_chat(
 
     if response.tool_call is not None and response.tool_call.name == "propose_draft":
         agent.draft_system_prompt = response.tool_call.arguments["system_prompt"]
-        reply_text = DRAFT_PROPOSED_MESSAGE
+        try:
+            review = review_draft(agent.draft_system_prompt)
+            agent.draft_review = review.model_dump()
+        except Exception:
+            logger.warning("reviewer failed for agent %s", agent.id, exc_info=True)
+            agent.draft_review = None
+
+        failed = [
+            (dimension, item["note"])
+            for dimension, item in (agent.draft_review or {}).items()
+            if not item["passed"]
+        ]
+        if failed:
+            reply_text = _next_question_from_review(llm_messages, failed)
+        elif agent.draft_review is not None:
+            reply_text = DRAFT_READY_MESSAGE
+        else:
+            reply_text = DRAFT_PROPOSED_MESSAGE
+
     else:
         reply_text = response.text
 
@@ -97,4 +141,5 @@ def architect_chat(
     return ArchitectChatResponse(
         message=ChatMessage(role="assistant", content=reply_text),
         draft_system_prompt=agent.draft_system_prompt,
+        draft_review=agent.draft_review,
     )
