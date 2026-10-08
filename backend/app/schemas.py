@@ -19,6 +19,16 @@ class UserRead(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str
+class ReviewItem(BaseModel):
+    passed: bool
+    note: str
+
+class DraftReview(BaseModel):
+    role_clarity: ReviewItem
+    tasks: ReviewItem
+    tone: ReviewItem
+    edge_cases: ReviewItem
+    examples: ReviewItem
 
 class AgentCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
@@ -31,6 +41,7 @@ class AgentRead(BaseModel):
     owner_id: int
     created_at: datetime
     draft_system_prompt: str | None = None
+    draft_review: DraftReview | None = None
 
 
 class ChatMessage(BaseModel):
@@ -43,3 +54,6 @@ class ArchitectChatRequest(BaseModel):
 class ArchitectChatResponse(BaseModel):
     message: ChatMessage
     draft_system_prompt: str | None = None
+    draft_review: DraftReview | None = None
+
+
