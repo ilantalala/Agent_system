@@ -6,6 +6,7 @@ from app.database import get_db
 from app.dependencies import get_owned_agent
 from app.llm import LLMMessage, ToolSchema, call_llm
 from app.models import Agent, Conversation, Message
+from app.orchestrator import run_agent_turn, save_turn
 from app.schemas import ArchitectChatRequest, ArchitectChatResponse, ChatMessage
 import logging
 
@@ -75,13 +76,13 @@ DRAFT_READY_MESSAGE = (
 )
 
 def _next_question_from_review(
-    llm_messages: list[LLMMessage], failed: list[tuple[str, str]]
+    conversation: Conversation, db: Session, user_content: str, failed: list[tuple[str, str]]
 ) -> str:
     gaps = "\n".join(f"- {dimension}: {note}" for dimension, note in failed)
     system_prompt = FEEDBACK_SYSTEM_PROMPT_TEMPLATE.format(
         base=ARCHITECT_SYSTEM_PROMPT, gaps=gaps
     )
-    response = call_llm(system_prompt, llm_messages)
+    response = run_agent_turn(db, conversation, system_prompt, user_content)
     return response.text
 
 @router.post("/chat", response_model=ArchitectChatResponse)
@@ -91,23 +92,18 @@ def architect_chat(
     db: Session = Depends(get_db),
 ):
     conversation = db.scalar(
-        select(Conversation).where(Conversation.agent_id == agent.id)
+        select(Conversation).where(
+            Conversation.agent_id == agent.id, Conversation.kind == "architect"
+            )
     )
     if conversation is None:
-        conversation = Conversation(agent_id=agent.id)
+        conversation = Conversation(agent_id=agent.id, kind = "architect")
         db.add(conversation)
         db.flush()
 
-    history = db.scalars(
-        select(Message)
-        .where(Message.conversation_id == conversation.id)
-        .order_by(Message.id)
-    ).all()
-    llm_messages = [LLMMessage(role=m.role, content=m.content) for m in history]
-    llm_messages.append(LLMMessage(role="user", content=payload.content))
-
-    response = call_llm(
-        ARCHITECT_SYSTEM_PROMPT, llm_messages, tools=[PROPOSE_DRAFT_TOOL]
+    
+    response = run_agent_turn(
+        db, conversation, ARCHITECT_SYSTEM_PROMPT, payload.content, tools=[PROPOSE_DRAFT_TOOL]
     )
 
     if response.tool_call is not None and response.tool_call.name == "propose_draft":
@@ -125,7 +121,7 @@ def architect_chat(
             if not item["passed"]
         ]
         if failed:
-            reply_text = _next_question_from_review(llm_messages, failed)
+            reply_text = _next_question_from_review(conversation, db, payload.content, failed)
         elif agent.draft_review is not None:
             reply_text = DRAFT_READY_MESSAGE
         else:
@@ -134,8 +130,7 @@ def architect_chat(
     else:
         reply_text = response.text
 
-    db.add(Message(conversation_id=conversation.id, role="user", content=payload.content))
-    db.add(Message(conversation_id=conversation.id, role="assistant", content=reply_text))
+    save_turn(db, conversation, payload.content, reply_text)
     db.commit()
 
     return ArchitectChatResponse(

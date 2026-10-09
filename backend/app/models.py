@@ -52,6 +52,7 @@ class Conversation(Base):
         index=True,
         nullable=False,
     )
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, server_default="architect")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
