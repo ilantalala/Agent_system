@@ -32,17 +32,17 @@ class Agent(Base):
         index=True,
         nullable=False,
     )    
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="draft")
     created_at:Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     draft_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     owner: Mapped["User"] = relationship(back_populates="agents")
     conversations: Mapped[list["Conversation"]] = relationship(
         back_populates="agent", cascade="all, delete-orphan"
     )
     draft_review: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-
-
 class Conversation(Base):
     __tablename__ = "conversations"
 

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
@@ -46,3 +46,23 @@ def delete_agent(
     db.delete(agent)
     db.commit()
     
+@router.post("/{agent_id}/finalize", response_model=AgentRead)
+def finalize_agent(
+    agent: Agent = Depends(get_owned_agent),
+    db: Session = Depends(get_db),
+):
+    if agent.draft_system_prompt is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Agent has no draft system prompt to finalize",
+        )
+    if agent.status == "approved":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Agent is already approved",
+        )    
+    agent.system_prompt = agent.draft_system_prompt
+    agent.status = "approved"
+    db.commit()
+    db.refresh(agent)
+    return agent    
