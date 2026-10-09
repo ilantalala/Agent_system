@@ -56,4 +56,8 @@ class ArchitectChatResponse(BaseModel):
     draft_system_prompt: str | None = None
     draft_review: DraftReview | None = None
 
+class TestChatRequest(BaseModel):
+    content: str
 
+class TestChatResponse(BaseModel):
+    message: ChatMessage
