@@ -36,6 +36,8 @@ class AgentCreate(BaseModel):
 
 class AgentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+    status: str
+    system_prompt: str | None = None
     id: int
     name: str
     owner_id: int
