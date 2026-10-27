@@ -1,28 +1,37 @@
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.llm import LLMMessage, LLMResponse, ToolSchema, call_llm
+from app.llm.chat_model import get_chat_model
 from app.models import Conversation, Message
 
-def load_history(db: Session, conversation: Conversation) -> list[LLMMessage]:
+def load_history(db: Session, conversation: Conversation) -> list[BaseMessage]:
     history = db.scalars(
         select(Message)
         .where(Message.conversation_id == conversation.id)
         .order_by(Message.id)
 
     ).all()
-    return [LLMMessage(role=m.role, content=m.content) for m in history]
+    return [
+        HumanMessage(m.content) if m.role == "user" else AIMessage(m.content)
+        for m in history
+    ]
 
 def run_agent_turn(
     db: Session,
     conversation: Conversation,
     system_prompt: str,
     user_content: str,
-    tools: list[ToolSchema] | None = None,
-) -> LLMResponse:
-    llm_messages = load_history(db,conversation)
-    llm_messages.append(LLMMessage(role="user", content=user_content))
-    return call_llm(system_prompt, llm_messages, tools=tools)
+    tools: list[dict] | None = None,
+) -> AIMessage:
+    agent = conversation.agent
+    # BYOK: the agent's owner pays, even when an admin is the one chatting.
+    model = get_chat_model(agent, agent.owner)
+    if tools:
+        model = model.bind_tools(tools)
+    llm_messages = [SystemMessage(system_prompt), *load_history(db, conversation)]
+    llm_messages.append(HumanMessage(user_content))
+    return model.invoke(llm_messages)
 
 def save_turn(
     db: Session, conversation: Conversation, user_content: str, reply_text: str
