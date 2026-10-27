@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from app.reviewer import review_draft
 from app.database import get_db
 from app.dependencies import get_owned_agent
-from app.llm import LLMMessage, ToolSchema, call_llm
+from app.llm.structured import get_tool_call
 from app.models import Agent, Conversation, Message
 from app.orchestrator import run_agent_turn, save_turn
 from app.schemas import ArchitectChatRequest, ArchitectChatResponse, ChatMessage
@@ -14,27 +14,30 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agents/{agent_id}/architect", tags=["architect"])
 
-PROPOSE_DRAFT_TOOL = ToolSchema(
-    name="propose_draft",
-    description=(
-        "Call this once you have enough information about the agent's "
-        "role, tasks, tone, edge cases, and an example interaction to "
-        "propose a complete system prompt."
-    ),
-    input_schema={
-        "type": "object",
-        "properties": {
-            "system_prompt": {
-                "type": "string",
-                "description": (
-                    "The complete system prompt drafted for the new agent, "
-                    "based on everything learned in the interview."
-                ),
-            }
+PROPOSE_DRAFT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "propose_draft",
+        "description": (
+            "Call this once you have enough information about the agent's "
+            "role, tasks, tone, edge cases, and an example interaction to "
+            "propose a complete system prompt."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "system_prompt": {
+                    "type": "string",
+                    "description": (
+                        "The complete system prompt drafted for the new agent, "
+                        "based on everything learned in the interview."
+                    ),
+                }
+            },
+            "required": ["system_prompt"],
         },
-        "required": ["system_prompt"],
     },
-)
+}
 
 DRAFT_PROPOSED_MESSAGE = (
     "I've put together a draft system prompt for your agent based on our "
@@ -106,10 +109,11 @@ def architect_chat(
         db, conversation, ARCHITECT_SYSTEM_PROMPT, payload.content, tools=[PROPOSE_DRAFT_TOOL]
     )
 
-    if response.tool_call is not None and response.tool_call.name == "propose_draft":
-        agent.draft_system_prompt = response.tool_call.arguments["system_prompt"]
+    tool_call = get_tool_call(response, "propose_draft")
+    if tool_call is not None and tool_call["name"] == "propose_draft":
+        agent.draft_system_prompt = tool_call["args"]["system_prompt"]
         try:
-            review = review_draft(agent.draft_system_prompt)
+            review = review_draft(agent, agent.draft_system_prompt)
             agent.draft_review = review.model_dump()
         except Exception:
             logger.warning("reviewer failed for agent %s", agent.id, exc_info=True)

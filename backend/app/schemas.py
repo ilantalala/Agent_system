@@ -20,8 +20,10 @@ class Token(BaseModel):
     access_token: str
     token_type: str
 class ReviewItem(BaseModel):
-    passed: bool
-    note: str
+    passed: bool = Field(description="Whether the draft satisfies this dimension.")
+    note: str = Field(
+        description="Why it passed or failed, and what's missing if it failed."
+    )
 
 class DraftReview(BaseModel):
     role_clarity: ReviewItem
