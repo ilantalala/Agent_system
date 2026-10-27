@@ -19,6 +19,29 @@ def get_chat_model(agent: Agent, user: User) -> BaseChatModel:
             api_key=settings.openai_api_key,
             max_tokens=settings.openai_max_output_tokens,
         )
+    
+    if settings.llm_provider == "anthropic":
+        if not settings.anthropic_api_key:
+            raise RuntimeError(
+                "LLM_PROVIDER=anthropic but ANTHROPIC_API_KEY is not set in .env"
+            )
+        return init_chat_model(
+            settings.anthropic_model,
+            model_provider="anthropic",
+            api_key=settings.anthropic_api_key,
+            max_tokens=settings.anthropic_max_tokens,
+        )
+        
+    if settings.llm_provider == "ollama":
+        return init_chat_model(
+            settings.ollama_model,
+            model_provider="ollama",
+            base_url=settings.ollama_base_url,
+            client_kwargs={"timeout": settings.ollama_timeout_seconds},
+        )
+
     raise ValueError(
-        f"get_chat_model doesn't support LLM_PROVIDER {settings.llm_provider!r} yet"
+        f"Unknown LLM_PROVIDER {settings.llm_provider!r}. "
+        "Known: anthropic, ollama, openai"
     )
+
