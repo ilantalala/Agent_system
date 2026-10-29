@@ -1,99 +1,25 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
+from fastapi.concurrency import run_in_threadpool
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import HumanMessage
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from app.reviewer import review_draft
+
+from app.builder.graph import builder_thread_id
+from app.builder.state import BuilderContext
 from app.database import get_db
 from app.dependencies import get_owned_agent
-from app.llm.structured import get_tool_call
-from app.models import Agent, Conversation, Message
-from app.orchestrator import run_agent_turn, save_turn
+from app.llm.chat_model import get_chat_model
+from app.models import Agent, Conversation
+from app.orchestrator import save_turn
 from app.schemas import ArchitectChatRequest, ArchitectChatResponse, ChatMessage
-import logging
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agents/{agent_id}/architect", tags=["architect"])
 
-PROPOSE_DRAFT_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "propose_draft",
-        "description": (
-            "Call this once you have enough information about the agent's "
-            "role, tasks, tone, edge cases, and an example interaction to "
-            "propose a complete system prompt."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "system_prompt": {
-                    "type": "string",
-                    "description": (
-                        "The complete system prompt drafted for the new agent, "
-                        "based on everything learned in the interview."
-                    ),
-                }
-            },
-            "required": ["system_prompt"],
-        },
-    },
-}
 
-DRAFT_PROPOSED_MESSAGE = (
-    "I've put together a draft system prompt for your agent based on our "
-    "conversation. Check it out, and let me know if you'd like any changes."
-)
-
-ARCHITECT_SYSTEM_PROMPT = (
-    "You are an interviewer helping a user design a system prompt for a "
-    "new AI agent they want to build.\n\n"
-    "Ask exactly ONE focused question per reply. Never ask more than one "
-    "question in a single message.\n\n"
-    "Over the course of the conversation, work through these topics, one "
-    "at a time, in whatever order fits the conversation:\n"
-    "- the agent's role and purpose\n"
-    "- the main tasks it should handle\n"
-    "- its tone and personality\n"
-    "- edge cases or situations it should handle carefully\n"
-    "- an example of a typical interaction\n\n"
-    "Before asking your next question, briefly acknowledge what the user "
-    "just told you in a sentence or less, so it reads as a conversation, "
-    "not a form. Keep every message short.\n\n"
-    "Once you have learned enough about all of the topics above, call the "
-    "propose_draft tool with the complete system prompt instead of asking "
-    "another question."
-)
-
-FEEDBACK_SYSTEM_PROMPT_TEMPLATE = (
-    "{base}\n\n"
-    "You just proposed a draft system prompt, but a review found it still "
-    "needs work on:\n{gaps}\n\n"
-    "Ask ONE natural follow-up question that addresses the first item above. "
-    "Continue the interview as if it's simply the next question — do not "
-    "mention 'review', 'rubric', or that an evaluation happened."
-)
-
-DRAFT_READY_MESSAGE = (
-    "Your draft passed review on all five fronts — role, tasks, tone, edge "
-    "cases, and examples are all covered. It's ready to move to testing."
-)
-
-def _next_question_from_review(
-    conversation: Conversation, db: Session, user_content: str, failed: list[tuple[str, str]]
-) -> str:
-    gaps = "\n".join(f"- {dimension}: {note}" for dimension, note in failed)
-    system_prompt = FEEDBACK_SYSTEM_PROMPT_TEMPLATE.format(
-        base=ARCHITECT_SYSTEM_PROMPT, gaps=gaps
-    )
-    response = run_agent_turn(db, conversation, system_prompt, user_content)
-    return response.text
-
-@router.post("/chat", response_model=ArchitectChatResponse)
-def architect_chat(
-    payload: ArchitectChatRequest,
-    agent: Agent = Depends(get_owned_agent),
-    db: Session = Depends(get_db),
-):
+# The DB layer is still synchronous, so DB work runs in a worker thread and
+# only the slow part — the graph's model calls — runs on the event loop.
+def _start_turn(db: Session, agent: Agent) -> tuple[int, BaseChatModel]:
     conversation = db.scalar(
         select(Conversation).where(
             Conversation.agent_id == agent.id, Conversation.kind == "architect"
@@ -102,43 +28,45 @@ def architect_chat(
     if conversation is None:
         conversation = Conversation(agent_id=agent.id, kind = "architect")
         db.add(conversation)
-        db.flush()
+        db.commit()  # don't hold a transaction open across the model calls
+    return conversation.id, get_chat_model(agent, agent.owner)
 
-    
-    response = run_agent_turn(
-        db, conversation, ARCHITECT_SYSTEM_PROMPT, payload.content, tools=[PROPOSE_DRAFT_TOOL]
-    )
 
-    tool_call = get_tool_call(response, "propose_draft")
-    if tool_call is not None and tool_call["name"] == "propose_draft":
-        agent.draft_system_prompt = tool_call["args"]["system_prompt"]
-        try:
-            review = review_draft(agent, agent.draft_system_prompt)
-            agent.draft_review = review.model_dump()
-        except Exception:
-            logger.warning("reviewer failed for agent %s", agent.id, exc_info=True)
-            agent.draft_review = None
-
-        failed = [
-            (dimension, item["note"])
-            for dimension, item in (agent.draft_review or {}).items()
-            if not item["passed"]
-        ]
-        if failed:
-            reply_text = _next_question_from_review(conversation, db, payload.content, failed)
-        elif agent.draft_review is not None:
-            reply_text = DRAFT_READY_MESSAGE
-        else:
-            reply_text = DRAFT_PROPOSED_MESSAGE
-
-    else:
-        reply_text = response.text
-
-    save_turn(db, conversation, payload.content, reply_text)
-    db.commit()
-
-    return ArchitectChatResponse(
+def _finish_turn(
+    db: Session, agent: Agent, conversation_id: int, user_content: str, state: dict
+) -> ArchitectChatResponse:
+    reply_text = state["messages"][-1].text
+    if state.get("draft") is not None:
+        agent.draft_system_prompt = state["draft"]
+        agent.draft_review = state.get("review")
+    conversation = db.get(Conversation, conversation_id)
+    save_turn(db, conversation, user_content, reply_text)
+    response = ArchitectChatResponse(
         message=ChatMessage(role="assistant", content=reply_text),
         draft_system_prompt=agent.draft_system_prompt,
         draft_review=agent.draft_review,
+    )
+    db.commit()
+    return response
+
+
+@router.post("/chat", response_model=ArchitectChatResponse)
+async def architect_chat(
+    payload: ArchitectChatRequest,
+    request: Request,
+    agent: Agent = Depends(get_owned_agent),
+    db: Session = Depends(get_db),
+):
+    conversation_id, model = await run_in_threadpool(_start_turn, db, agent)
+
+    # One graph run per user message; the checkpointer loads and saves the
+    # builder's state for this conversation's thread.
+    state = await request.app.state.builder_graph.ainvoke(
+        {"messages": [HumanMessage(payload.content)]},
+        config={"configurable": {"thread_id": builder_thread_id(conversation_id)}},
+        context=BuilderContext(model=model),
+    )
+
+    return await run_in_threadpool(
+        _finish_turn, db, agent, conversation_id, payload.content, state
     )
