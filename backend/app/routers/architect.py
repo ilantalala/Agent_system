@@ -23,13 +23,17 @@ def _start_turn(db: Session, agent: Agent) -> tuple[int, BaseChatModel]:
     conversation = db.scalar(
         select(Conversation).where(
             Conversation.agent_id == agent.id, Conversation.kind == "architect"
-            )
+        )
     )
     if conversation is None:
-        conversation = Conversation(agent_id=agent.id, kind = "architect")
+        conversation = Conversation(agent_id=agent.id, kind="architect")
         db.add(conversation)
-        db.commit()  # don't hold a transaction open across the model calls
-    return conversation.id, get_chat_model(agent, agent.owner)
+        db.flush()  # send the INSERT so the new row gets its id
+    conversation_id = conversation.id
+    model = get_chat_model(agent, agent.owner)
+    # End the transaction last, so no connection is held across the model calls.
+    db.commit()
+    return conversation_id, model
 
 
 def _finish_turn(
