@@ -38,10 +38,10 @@ def _parse_json_text(text: str) -> dict | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def invoke_structured(
+async def invoke_structured(
     model: BaseChatModel, schema: type[T], messages: LanguageModelInput
 ) -> T:
-    result = model.with_structured_output(schema, include_raw=True).invoke(messages)
+    result = await model.with_structured_output(schema, include_raw=True).ainvoke(messages)
     if result["parsed"] is not None:
         return result["parsed"]
 

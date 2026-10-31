@@ -22,13 +22,10 @@ def run_agent_turn(
     conversation: Conversation,
     system_prompt: str,
     user_content: str,
-    tools: list[dict] | None = None,
 ) -> AIMessage:
     agent = conversation.agent
     # BYOK: the agent's owner pays, even when an admin is the one chatting.
     model = get_chat_model(agent, agent.owner)
-    if tools:
-        model = model.bind_tools(tools)
     llm_messages = [SystemMessage(system_prompt), *load_history(db, conversation)]
     llm_messages.append(HumanMessage(user_content))
     return model.invoke(llm_messages)
