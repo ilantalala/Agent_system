@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from app.runtime.runner import AgentRunner
 
 from fastapi import FastAPI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -14,6 +15,7 @@ async def lifespan(app: FastAPI):
     async with AsyncPostgresSaver.from_conn_string(checkpointer_conn_string()) as checkpointer:
         await checkpointer.setup()  # creates/migrates LangGraph's own tables
         app.state.builder_graph = build_builder_graph(checkpointer)
+        app.state.agent_runner = AgentRunner(checkpointer)
         yield
 
 

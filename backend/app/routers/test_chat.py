@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from app.llm.chat_model import get_chat_model
+from app.runtime.runner import AgentDefinition
 
 from app.database import get_db
 from app.dependencies import get_owned_agent
@@ -10,6 +12,34 @@ from app.schemas import ChatMessage, TestChatRequest, TestChatResponse
 
 router = APIRouter(prefix="/agents/{agent_id}/test-chat", tags=["test-chat"])
 
+# Test threads get their own prefix so test history can never mix with the
+# builder's threads or live channels.
+def test_thread_id(agent_id: int, conversation_id: int) -> str:
+    return f"test:{agent_id}:{conversation_id}"
+
+
+# The DB layer is still synchronous, so DB work runs in a worker thread and
+# only the slow part — the runner's model calls — runs on the event loop.
+def _start_turn(db: Session, agent: Agent) -> tuple[int, str, AgentDefinition]:
+    conversation = db.scalar(
+        select(Conversation).where(
+            Conversation.agent_id == agent.id, Conversation.kind == "test"
+        )
+    )
+    if conversation is None:
+        conversation = Conversation(agent_id=agent.id, kind="test")
+        db.add(conversation)
+        db.flush()  # send the INSERT so the new row gets its id
+    conversation_id = conversation.id
+    thread_id = test_thread_id(agent.id, conversation_id)
+    definition = AgentDefinition(
+        system_prompt=agent.draft_system_prompt,
+        # BYOK: the agent's owner pays, even when an admin is the one chatting.
+        model=get_chat_model(agent, agent.owner),
+    )
+    # End the transaction last, so no connection is held across the model calls.
+    db.commit()
+    return conversation_id, thread_id, definition
 
 @router.post("/chat", response_model=TestChatResponse)
 def test_chat(
