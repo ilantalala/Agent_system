@@ -68,6 +68,8 @@ old 4 → 6 · old 5+6 → 7 · old 7 → 9 · old 8 → 10 · old 11 → 12.
 *Concepts: React + authenticated API, basic state management*
 
 - Login/signup, agent dashboard, separate builder and test chat screens.
+- Test chat renders the stream from `POST /agents/{agent_id}/test-chat/stream`
+  live, with tool calls shown inline and collapsible (Epic 9 sends the events).
 
 ---
 
