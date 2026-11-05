@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
 from langchain_core.language_models import BaseChatModel
@@ -6,6 +7,7 @@ from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 
+from app.runtime.events import RunEvent
 from app.runtime.graph import build_runtime_graph
 from app.runtime.state import RuntimeContext
 # Tool rounds allowed per user message (each round = one paid model call).
@@ -50,3 +52,9 @@ class AgentRunner:
             context=context,
         )
         return state["messages"][-1].text
+
+    async def stream(
+        self, definition: AgentDefinition, thread_id: str, message: str
+    ) -> AsyncIterator[RunEvent]:
+        raise NotImplementedError
+        yield  # makes this an async generator, like the real implementation
