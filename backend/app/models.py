@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime,ForeignKey, String, func, Text,JSON
+from sqlalchemy import DateTime,ForeignKey, String, func, Text,JSON, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -39,12 +39,61 @@ class Agent(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     draft_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
-    system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The version real traffic uses. use_alter: agents and agent_versions point
+    # at each other, so this FK is added after both tables exist.
+    live_version_id: Mapped[int | None] = mapped_column(
+        ForeignKey("agent_versions.id", use_alter=True, ondelete="SET NULL"),
+        nullable=True,
+    )
     owner: Mapped["User"] = relationship(back_populates="agents")
     conversations: Mapped[list["Conversation"]] = relationship(
         back_populates="agent", cascade="all, delete-orphan"
     )
+    versions: Mapped[list["AgentVersion"]] = relationship(
+        back_populates="agent",
+        foreign_keys="AgentVersion.agent_id",
+        cascade="all, delete-orphan",
+        order_by="AgentVersion.number",
+    )
+    # post_update: set this pointer in a second UPDATE, after the version row exists.
+    live_version: Mapped["AgentVersion | None"] = relationship(
+        foreign_keys=[live_version_id], post_update=True
+    )
     draft_review: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # Read-only views of the live version, so AgentRead keeps its system_prompt field.
+    @property
+    def system_prompt(self) -> str | None:
+        return self.live_version.system_prompt if self.live_version else None
+
+    @property
+    def live_version_number(self) -> int | None:
+        return self.live_version.number if self.live_version else None
+
+
+class AgentVersion(Base):
+    # An immutable snapshot of a finalized prompt: never updated, only added.
+    __tablename__ = "agent_versions"
+    __table_args__ = (UniqueConstraint("agent_id", "number"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_id: Mapped[int] = mapped_column(
+        ForeignKey("agents.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    number: Mapped[int] = mapped_column(nullable=False)  # 1, 2, 3… per agent
+    system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    agent: Mapped["Agent"] = relationship(
+        back_populates="versions", foreign_keys=[agent_id]
+    )
+
+    @property
+    def is_live(self) -> bool:
+        return self.agent.live_version_id == self.id
 class Conversation(Base):
     __tablename__ = "conversations"
 

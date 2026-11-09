@@ -46,6 +46,15 @@ class AgentRead(BaseModel):
     created_at: datetime
     draft_system_prompt: str | None = None
     draft_review: DraftReview | None = None
+    live_version_number: int | None = None
+
+
+class AgentVersionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    number: int
+    system_prompt: str
+    created_at: datetime
+    is_live: bool
 
 
 class ChatMessage(BaseModel):
