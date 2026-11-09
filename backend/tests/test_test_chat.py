@@ -273,6 +273,39 @@ class TestChatRouteTests(unittest.TestCase):
         ).all()
         self.assertEqual(messages, [])
 
+    def test_stream_save_failure_sends_error_and_no_done(self):
+        with patch(
+            "app.routers.test_chat._finish_turn",
+            side_effect=RuntimeError("secret save detail"),
+        ):
+            response = self.client.post(self._stream_url(), json={"content": "save fail"})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.text
+        self.assertNotIn("secret save detail", body)
+
+        frames = _parse_sse(body)
+        self.assertEqual(
+            [name for name, _ in frames],
+            ["token", "tool_call", "tool_result", "error"],
+        )
+        self.assertNotIn("done", [name for name, _ in frames])
+        self.assertEqual(
+            frames[-1][1]["message"],
+            "Something went wrong while generating a reply.",
+        )
+
+        conversation = self.db.scalar(
+            select(Conversation).where(
+                Conversation.agent_id == self.agent.id, Conversation.kind == "test"
+            )
+        )
+        self.assertIsNotNone(conversation)
+        messages = self.db.scalars(
+            select(Message).where(Message.conversation_id == conversation.id)
+        ).all()
+        self.assertEqual(messages, [])
+
     def test_chat_400_without_draft(self):
         self.agent.draft_system_prompt = None
         self.db.commit()

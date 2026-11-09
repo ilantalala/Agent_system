@@ -1,4 +1,5 @@
 import logging
+from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
@@ -102,7 +103,7 @@ async def test_chat_stream(
     _require_draft(agent)
     conversation_id, thread_id, definition = await run_in_threadpool(_start_turn, db, agent)
 
-    async def event_gen():
+    async def event_gen() -> AsyncIterator[str]:
         try:
             async for event in request.app.state.agent_runner.stream(
                 definition, thread_id, payload.content
