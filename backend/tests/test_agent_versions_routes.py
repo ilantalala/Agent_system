@@ -210,6 +210,79 @@ class AgentVersionRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["detail"], "Version not found")
 
+    def test_activate_cannot_reach_another_agents_version(self):
+        other_agent = Agent(
+            name="Other",
+            owner_id=self.other.id,
+            draft_system_prompt="OTHER SECRET",
+        )
+        self.db.add(other_agent)
+        self.db.flush()
+        other_v1 = AgentVersion(
+            agent_id=other_agent.id,
+            number=1,
+            system_prompt="OTHER SECRET",
+        )
+        other_v2 = AgentVersion(
+            agent_id=other_agent.id,
+            number=2,
+            system_prompt="OTHER SECRET",
+        )
+        self.db.add_all([other_v1, other_v2])
+        self.db.flush()
+        other_agent.live_version_id = other_v2.id
+        other_agent.status = "approved"
+        self.db.commit()
+
+        self.client.post(f"/agents/{self.agent.id}/finalize")
+        agent = self._reload_agent()
+        before_live = agent.live_version_id
+        before_prompt = agent.system_prompt
+
+        response = self.client.post(f"/agents/{self.agent.id}/versions/2/activate")
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"], "Version not found")
+
+        agent = self._reload_agent()
+        self.assertEqual(agent.live_version_id, before_live)
+        self.assertEqual(agent.system_prompt, before_prompt)
+
+    def test_activate_picks_this_agents_version(self):
+        other_agent = Agent(
+            name="Other",
+            owner_id=self.other.id,
+            draft_system_prompt="OTHER SECRET",
+        )
+        self.db.add(other_agent)
+        self.db.flush()
+        other_v1 = AgentVersion(
+            agent_id=other_agent.id,
+            number=1,
+            system_prompt="OTHER SECRET",
+        )
+        self.db.add(other_v1)
+        self.db.flush()
+        other_agent.live_version_id = other_v1.id
+        other_agent.status = "approved"
+        self.db.commit()
+
+        self.client.post(f"/agents/{self.agent.id}/finalize")
+        agent = self._reload_agent()
+        agent.draft_system_prompt = "You are version two."
+        self.db.commit()
+        self.client.post(f"/agents/{self.agent.id}/finalize")
+
+        response = self.client.post(f"/agents/{self.agent.id}/versions/1/activate")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["system_prompt"], "You are version one.")
+        self.assertNotEqual(body["system_prompt"], "OTHER SECRET")
+
+        agent = self._reload_agent()
+        self.assertIsNotNone(agent.live_version)
+        self.assertEqual(agent.live_version.agent_id, self.agent.id)
+        self.assertEqual(agent.live_version.system_prompt, "You are version one.")
+
     def test_other_user_gets_404_and_nothing_changes(self):
         self.client.post(f"/agents/{self.agent.id}/finalize")
         agent = self._reload_agent()
